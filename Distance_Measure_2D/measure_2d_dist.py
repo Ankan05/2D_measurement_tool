@@ -20,6 +20,13 @@ img   = None             # displayed frame (redrawn each loop)
 clone = None             # pristine copy of the loaded image
 root  = None             # tkinter root kept alive for dialogs
 
+# UI scale — computed once after image load from image dimensions
+FS    = 0.5              # font scale          (overwritten in compute_ui_scale)
+TH    = 1                # text thickness      (overwritten in compute_ui_scale)
+LW    = 2                # line width          (overwritten in compute_ui_scale)
+DOT   = 5                # dot radius          (overwritten in compute_ui_scale)
+BH    = 58               # banner height px    (overwritten in compute_ui_scale)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Colors  (BGR)
@@ -43,9 +50,13 @@ C_BAN_OK    = (  0, 200,  80)  # green  – READY
 # ─────────────────────────────────────────────────────────────────────────────
 #  Utility
 # ─────────────────────────────────────────────────────────────────────────────
-def put(im, text, pos, color=C_TEXT, fs=0.44, th=1):
+def put(im, text, pos, color=C_TEXT, fs=None, th=None):
+    """putText wrapper that defaults to the image-scaled FS and TH globals."""
     cv2.putText(im, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
-                fs, color, th, cv2.LINE_AA)
+                fs if fs is not None else FS,
+                color,
+                th if th is not None else TH,
+                cv2.LINE_AA)
 
 
 def ask_float(prompt):
@@ -60,37 +71,60 @@ def warn(msg):
     messagebox.showwarning("Calibration Warning", msg)
 
 
+def compute_ui_scale(im):
+    """
+    Derive all UI size constants from the image's longest dimension so
+    text, lines and dots stay legible regardless of image resolution.
+
+    Reference: a 1000-px image gets FS=0.55 (readable default).
+    Everything scales linearly beyond that.
+    """
+    global FS, TH, LW, DOT, BH
+    longest = max(im.shape[:2])          # use height or width, whichever is larger
+    base    = longest / 1000.0           # 1.0 at 1000 px,  4.0 at 4000 px, etc.
+
+    FS  = round(max(0.40, base * 0.55), 3)   # font scale  – floor at 0.40
+    TH  = max(1, int(base * 1.2))            # text stroke thickness
+    LW  = max(1, int(base * 1.8))            # line/ellipse width
+    DOT = max(4, int(base * 6))              # click-dot radius
+    BH  = max(50, int(base * 60))            # banner height
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Banner  (top-of-frame status bar)
 # ─────────────────────────────────────────────────────────────────────────────
 def draw_banner(im):
     w = im.shape[1]
-    cv2.rectangle(im, (0, 0), (w, 58), BG_DARK, -1)
+    cv2.rectangle(im, (0, 0), (w, BH), BG_DARK, -1)
 
     if state == "SET_SCALE_X":
-        heading = "STEP 1 / 2  —  Horizontal Scale Calibration"
+        heading = "STEP 1 / 2  -  Horizontal Scale Calibration"
         sub     = "Click 2 points on a known HORIZONTAL reference line, then enter its real length."
         hcol    = C_BAN_X
 
     elif state == "SET_SCALE_Y":
-        heading = "STEP 2 / 2  —  Vertical Scale Calibration"
+        heading = "STEP 2 / 2  -  Vertical Scale Calibration"
         sub     = "Click 2 points on a known VERTICAL reference line, then enter its real length."
         hcol    = C_BAN_Y
 
     else:  # READY
         sx  = f"{scale_x:.4f}" if scale_x else "?"
         sy  = f"{scale_y:.4f}" if scale_y else "?"
-        heading = f"READY   |   scale_x = {sx} px/unit     scale_y = {sy} px/unit"
-        sub     = (f"Mode: [{mode.upper()}]   |   "
-                   "m = measure    o = circle    c = clear drawings    r = recalibrate    q = quit")
+        heading = f"READY  |  scale_x={sx} px/unit   scale_y={sy} px/unit"
+        sub     = (f"Mode:[{mode.upper()}]  |  "
+                   "m=measure  o=circle  c=clear  r=recalibrate  q=quit")
         hcol    = C_BAN_OK
 
-    put(im, heading, (12, 22), hcol,  fs=0.50, th=1)
-    put(im, sub,     (12, 44), C_TEXT, fs=0.38, th=1)
+    row1 = max(14, int(BH * 0.40))   # y position of heading line
+    row2 = max(30, int(BH * 0.80))   # y position of sub line
 
-    # Pending-point counter hint
+    put(im, heading, (12, row1), hcol,  fs=FS,        th=TH)
+    put(im, sub,     (12, row2), C_TEXT, fs=FS * 0.78, th=max(1, TH - 1))
+
+    # Pending-point hint
     if state in ("SET_SCALE_X", "SET_SCALE_Y") and len(points) == 1:
-        put(im, f"  Point 1 set — click Point 2", (w - 310, 22), C_BAN_X, fs=0.42)
+        hint_x = max(10, w - int(FS * 580))
+        put(im, "Point 1 set - click Point 2", (hint_x, row1), C_BAN_X, fs=FS * 0.85)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,9 +133,9 @@ def draw_banner(im):
 def draw_calib_lines(im):
     for seg in calib_lines:
         p1, p2 = seg[0], seg[1]
-        cv2.line(im, p1, p2, C_CALIB, 2, cv2.LINE_AA)
-        cv2.circle(im, p1, 5, C_CALIB, -1)
-        cv2.circle(im, p2, 5, C_CALIB, -1)
+        cv2.line(im, p1, p2, C_CALIB, LW, cv2.LINE_AA)
+        cv2.circle(im, p1, DOT, C_CALIB, -1)
+        cv2.circle(im, p2, DOT, C_CALIB, -1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,8 +143,8 @@ def draw_calib_lines(im):
 # ─────────────────────────────────────────────────────────────────────────────
 def draw_pending(im):
     for p in points:
-        cv2.circle(im, p, 5, C_POINT, -1)
-        cv2.circle(im, p, 8, C_POINT, 1)
+        cv2.circle(im, p, DOT,     C_POINT, -1)
+        cv2.circle(im, p, DOT + 3, C_POINT,  1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,25 +161,26 @@ def render_measure(im, p1, p2):
     angle = np.degrees(np.arctan2(rdy, rdx))
 
     # Main line
-    cv2.line(im, p1, p2, C_LINE, 2, cv2.LINE_AA)
+    cv2.line(im, p1, p2, C_LINE, LW, cv2.LINE_AA)
 
-    # Projection helpers (dotted look via dashes)
+    # Projection helpers
     corner = (p2[0], p1[1])
-    cv2.line(im, p1,     corner, C_PROJ, 1, cv2.LINE_AA)
-    cv2.line(im, corner, p2,     C_PROJ, 1, cv2.LINE_AA)
+    cv2.line(im, p1,     corner, C_PROJ, max(1, LW - 1), cv2.LINE_AA)
+    cv2.line(im, corner, p2,     C_PROJ, max(1, LW - 1), cv2.LINE_AA)
 
     # End-point dots
-    cv2.circle(im, p1, 5, C_POINT, -1)
-    cv2.circle(im, p2, 5, C_POINT, -1)
+    cv2.circle(im, p1, DOT, C_POINT, -1)
+    cv2.circle(im, p2, DOT, C_POINT, -1)
 
-    # Labels
-    mx = (p1[0] + p2[0]) // 2
-    my = (p1[1] + p2[1]) // 2
+    # Label offset scaled with font size so they don't overlap on big images
+    off = max(8, int(FS * 20))
+    mx  = (p1[0] + p2[0]) // 2
+    my  = (p1[1] + p2[1]) // 2
 
-    put(im, f"dx = {rdx:.2f}",    (min(p1[0], p2[0]), p1[1] - 10), C_TEXT)
-    put(im, f"dy = {rdy:.2f}",    (p2[0] + 8, (p1[1] + p2[1]) // 2), C_TEXT)
-    put(im, f"d  = {rdist:.2f}",  (mx - 30, my - 12), C_DIM, fs=0.50, th=1)
-    put(im, f"{angle:.1f}"+" °",   (p2[0] + 4, p2[1] + 18), C_TEXT)
+    put(im, f"dx={rdx:.2f}",          (min(p1[0], p2[0]), p1[1] - off))
+    put(im, f"dy={rdy:.2f}",          (p2[0] + off, (p1[1] + p2[1]) // 2))
+    put(im, f"d={rdist:.2f}",         (mx - off, my - off), C_DIM)
+    put(im, f"angle={angle:.1f} deg", (p2[0] + off, p2[1] + off * 2))
 
 
 def render_circle(im, p1, p2, p3):
@@ -187,14 +222,15 @@ def render_circle(im, p1, p2, p3):
     rx_px = int(radius_real * scale_x)
     ry_px = int(radius_real * scale_y)
 
-    cv2.ellipse(im, (cx_px, cy_px), (rx_px, ry_px), 0, 0, 360, C_CIRCLE, 2, cv2.LINE_AA)
-    cv2.circle(im,  (cx_px, cy_px), 5, C_CENTER, -1)
+    cv2.ellipse(im, (cx_px, cy_px), (rx_px, ry_px), 0, 0, 360, C_CIRCLE, LW, cv2.LINE_AA)
+    cv2.circle(im,  (cx_px, cy_px), DOT, C_CENTER, -1)
 
     # Draw the three anchor points
     for p in [p1, p2, p3]:
-        cv2.circle(im, p, 5, C_POINT, -1)
+        cv2.circle(im, p, DOT, C_POINT, -1)
 
-    put(im, f"r = {radius_real:.2f}", (cx_px + 10, cy_px), C_CIRCLE, fs=0.50)
+    off = max(8, int(FS * 20))
+    put(im, f"r={radius_real:.2f}", (cx_px + off, cy_px), C_CIRCLE)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,6 +343,9 @@ def main():
         print(f"Could not read image: {file_path}")
         return
     clone = img.copy()
+    compute_ui_scale(img)          # ← derive FS, TH, LW, DOT, BH from image size
+    print(f"[i] Image size: {img.shape[1]}x{img.shape[0]} px  |  "
+          f"UI scale: FS={FS}  TH={TH}  LW={LW}  DOT={DOT}  BH={BH}")
 
     cv2.namedWindow("Measurement Tool", cv2.WINDOW_NORMAL)
     cv2.setMouseCallback("Measurement Tool", mouse_callback)
